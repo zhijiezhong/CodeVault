@@ -6,12 +6,17 @@ import logging
 import os
 import random
 import sys
+from collections import defaultdict
 
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from texttable import Texttable
 from torch.nn import Module
+
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, Alignment
 
 
 def set_seed(seed: int) -> None:
@@ -159,11 +164,6 @@ def create_exp_folder(base_dir: str):
 
 
 def get_exp_sub_folder_path(output_dir):
-    """
-    创建三个文件夹
-    :param output_dir: 目录
-    :return: 三个文件夹的路径
-    """
     output_dir = create_exp_folder(output_dir)
     log_dir = os.path.join(output_dir, 'log')
     model_dir = os.path.join(output_dir, 'model')
@@ -174,7 +174,7 @@ def get_exp_sub_folder_path(output_dir):
     return log_dir, model_dir, figures_dir
 
 
-def plot_dict_to_individual_files(metric, folder_path):
+def plot_dict_to_individual_files(metric: defaultdict, folder_path: str):
     def set_sci_style():
         # 设置 Matplotlib 样式为 SCI 形式
         plt.style.use('seaborn-white')  # 使用白色背景
@@ -245,3 +245,91 @@ def extract_last_two_values(directory):
 
     print("Max Test AUC:", (max_test_auc, max_test_auc_exp, metric_auc))
     print("Max Test AP:", (max_test_ap, max_test_ap_exp, metric_ap))
+
+
+def write_to_excel(parameters: list, values: list, metric: dict, compare: list = None, verbose: bool = True,
+                   filename: str = 'output.xlsx') -> None:
+    """
+    将参数和值及其对应的指标写入Excel文件，并设置字体为新罗马，居中对齐。
+
+    :param parameters: 参数列表
+    :param values: 参数值列表
+    :param metric: 指标字典
+    :param compare: 比较指标（默认为None）
+    :parm verbose: 是否一起写入参数和参数值（默认为True）
+    :param filename: 输出的Excel文件名（默认为'output.xlsx'）
+    """
+
+    def find_first_empty_column(ws):
+        """找到工作表中第一行第一个两列都是空的列"""
+        col = 1
+        while True:
+            if ws.cell(row=1, column=col).value is None and ws.cell(row=1, column=col + 1).value is None:
+                return col
+            col += 1
+
+    def auto_adjust_column_width(ws, start_col, end_col):
+        """自动调整列宽"""
+        for col in range(start_col, end_col + 1):
+            max_length = 0
+            column_letter = get_column_letter(col)
+            for cell in ws[column_letter]:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+    if compare is None:
+        compare = [1] * len(metric)
+
+    # 尝试加载现有工作簿，如果不存在则创建新的工作簿
+    try:
+        wb = load_workbook(filename)
+    except FileNotFoundError:
+        wb = Workbook()
+
+    ws = wb.active
+
+    # 找到第一个空的列
+    start_column = find_first_empty_column(ws)
+
+    # 如果不是第一列，则多添加一个空白列
+    if start_column != 1:
+        start_column += 1
+
+    # 设置字体和居中对齐样式
+    font = Font(name='Times New Roman')
+    alignment = Alignment(horizontal='center', vertical='center')
+
+    # 将参数和值作为单个单元格的值写入
+    if verbose:
+        parameters_pair = '_'.join(f'{param}: {value}' for param, value in zip(parameters, values))
+    else:
+        parameters_pair = '_'.join(values)
+    cell = ws.cell(row=1, column=start_column, value=parameters_pair)
+    cell.font = font
+    cell.alignment = alignment
+
+    # 写入指标
+    start_column += 1
+    for idx, (key, values) in enumerate(metric.items()):
+        # 根据compare数组判断是最大值还是最小值
+        max_index = values.index(max(values)) if compare[idx] == 1 else values.index(min(values))
+
+        tmp = {k: v[max_index] for k, v in metric.items()}
+
+        cell = ws.cell(row=1, column=start_column + idx, value='Max_' + key)
+        cell.font = font
+        cell.alignment = alignment
+        cell = ws.cell(row=2, column=start_column + idx, value=str(tmp))
+        cell.font = font
+        cell.alignment = alignment
+
+    # 自动调整列宽
+    auto_adjust_column_width(ws, 1, start_column + len(metric) - 1)
+
+    wb.save(filename)
+    print(f"Data written to {filename} successfully.")
